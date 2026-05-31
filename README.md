@@ -50,7 +50,7 @@ portuguese:rule("people_there", {"npeople"}, {
   { {"npeople", engine.DEFAULT}, "Há {npeople} pessoas aqui." }
 })
 portuguese:rule("gotthat", {"person"}, {
-  { {"person", "player"}, "Tu obteste isso!" },
+  { {"person", "player"}, "Tu obtiveste isso!" },
   { {"person", "narrator"}, "Eu obtive isso!" },
   { {"person", "character"}, "Ele obteve isso!" };
 })
