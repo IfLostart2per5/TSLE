@@ -1,5 +1,5 @@
 --Language Selector - this is an abstraction to get strings and rules quickly, and to build languages for your app
-local eng = require "src.core"
+local eng = require "tsle.core"
 local languages = {} --pus fora pois isto impede o usuário de acessar
 local mod = {}
 local unpack = unpack or table.unpack
@@ -52,23 +52,39 @@ function mod.importlanguage(filename)
     return lang
 end
 
+local function processdefs(userdefs, engine, keyprefix, builtdef)
+    builtdef = builtdef or {}
+    keyprefix = keyprefix or ""
+    for k, v in pairs(userdefs) do
+        local key = keyprefix ..  k
+        if type(v) == "string" then
+            engine:string(key, v)
+            builtdef[k] = v
+        elseif type(v) == "table" and v[1] and v[2] then
+            engine:rule(key, v[1], v[2])
+            builtdef[k] = engine:rule(key)
+        elseif type(v) == "table" then
+            builtdef[k] = {}
+            processdefs(v, engine, key .. ".",builtdef[k])
+        else
+            error("invalid value")
+        end
+    end
+
+    return builtdef
+end
 ---@param name string
 ---@param code string ISO code of the language
 ---@param country string? country code (useful to distinguish dialects of the language)
----@param userdefs table<string,definition>
+---@param userdefs table<string,definition|table>
 ---@return language
 function mod.buildlanguage(name, code, country, userdefs)
     local engine = eng.new()
-    for k, v in pairs(userdefs) do
-        if type(v) == "string" then
-            engine:string(k, v)
-        else
-            engine:rule(k, v[1], v[2])
-        end
-    end
+    local defs = processdefs(userdefs, engine)
     
     languages[name] = {
         name=name,
+        defs=defs,
         engine=engine,
         code=code,
         country=country
@@ -84,6 +100,29 @@ function mod.language(name)
     return assert(languages[name], "Language '"..name.."' not found")
 end
 
+--it creates an abstraction to access nested strings and rules gracefully
+local function langgetter_object(defs, eng, prefix)
+    if not (defs or eng) then
+        error("Expected a definition and an engine")
+    end
+    local children = {}
+    prefix = prefix or ""
+    return setmetatable({}, {
+        __index=function (t, k)
+            local key = prefix ..  k
+            local def = defs[k]
+            if type(def) == "table" then
+                if not children[k] then
+                    children[k] = langgetter_object(def, eng, key..".")
+                end
+                return children[k]
+            else
+                
+                return eng:string(key) or eng:rule(key)
+            end
+        end
+    })
+end
 ---it creates a translator
 ---@return translator
 function mod.translator()
@@ -91,18 +130,12 @@ function mod.translator()
     ---@type translator
     obj = {
         curlanguage = nil,
-      lang=setmetatable({}, {
-        __index=function (t, k)
-            local curlang = obj.curlanguage
-            if curlang then
-                return curlang.engine:rule(k) or curlang.engine:string(k)
-            end
-        end
-    })
-   }
+      lang=nil
+    }
 
     function obj:setlanguage(name)
         self.curlanguage = mod.language(name)
+        self.lang=langgetter_object(self.curlanguage.defs, self.curlanguage.engine)
     end
 
     ---@param key string
