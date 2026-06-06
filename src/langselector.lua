@@ -9,20 +9,26 @@ local unpack = unpack or table.unpack
 ---@field name string
 ---@field code string
 ---@field country string?
+---@field defs rule
+---@field parent language?
 local language = {}
+
+---@alias rule table<string,definition|rule>
 
 ---@alias definition string|{[1]: string[], [2]: table[]}
 
 ---a string and rule searcher
 ---@class translator
 ---@field curlanguage language?
----@field lang table
+---@field lang table?
 local translator = {
-    ---@type fun(self,key:string,args:any[],langname:string): string
-    ---@overload fun(self,key:string,langname:string): string
-    translate = function (self,key, args, langname) end,
-    ---@type fun(self,name:string)
-    setlanguage=function (self,name) end
+    ---@type fun(self,key:string,args:any[],langcode:string): string
+    ---@overload fun(self,key:string,langcode:string): string
+    translate = function (self,key, args, langcode) end,
+    ---@type fun(self,code:string)
+    setcurrentlanguage=function (self,code) end,
+    ---@type fun(self):language
+    getcurrentlanguage=function (self)end
 }
 
 ---imports a language and builds it
@@ -31,7 +37,11 @@ local translator = {
 function mod.importlanguage(filename)
     local env = {
         tostring=tostring,
-        DEFAULT=eng.DEFAULT
+        DEFAULT=eng.DEFAULT,
+        abs=math.abs,
+        Alt=eng.alternate,
+        pairs=pairs,
+        ipairs=ipairs
     }
 
     local code, err = loadfile(filename .. ".lua", "t", env)
@@ -52,20 +62,21 @@ function mod.importlanguage(filename)
     return lang
 end
 
-local function processdefs(userdefs, engine, keyprefix, builtdef)
+local function processdefs(userdefs, engine, keyprefix, builtdef, parentdefs)
     builtdef = builtdef or {}
+    setmetatable(builtdef, {__index=parentdefs})
     keyprefix = keyprefix or ""
     for k, v in pairs(userdefs) do
         local key = keyprefix ..  k
         if type(v) == "string" then
             engine:string(key, v)
             builtdef[k] = v
-        elseif type(v) == "table" and v[1] and v[2] then
+        elseif type(v) == "table" and type(v[1]) == "table" then
             engine:rule(key, v[1], v[2])
             builtdef[k] = engine:rule(key)
         elseif type(v) == "table" then
             builtdef[k] = {}
-            processdefs(v, engine, key .. ".",builtdef[k])
+            processdefs(v, engine, key .. ".",builtdef[k], parentdefs and parentdefs[k])
         else
             error("invalid value")
         end
@@ -76,53 +87,33 @@ end
 ---@param name string
 ---@param code string ISO code of the language
 ---@param country string? country code (useful to distinguish dialects of the language)
----@param userdefs table<string,definition|table>
+---@param userdefs rule
+---@param parent language? useful for dialect variation
 ---@return language
-function mod.buildlanguage(name, code, country, userdefs)
+function mod.buildlanguage(name, code, country, userdefs, parent)
     local engine = eng.new()
-    local defs = processdefs(userdefs, engine)
-    
-    languages[name] = {
+    local defs = processdefs(userdefs, engine, nil, nil, parent and parent.defs)
+    local langcode = code .. (country and "-"..country or "")
+    languages[langcode] = {
         name=name,
         defs=defs,
         engine=engine,
         code=code,
-        country=country
+        country=country,
+        parent=parent
     }
 
-    return languages[name]
+    return languages[langcode]
 end
 
 ---looks up a language
----@param name string
+---@param code string
 ---@return language
-function mod.language(name)
-    return assert(languages[name], "Language '"..name.."' not found")
+function mod.language(code)
+    return assert(languages[code], "Language '"..code.."' not found")
 end
 
---it creates an abstraction to access nested strings and rules gracefully
-local function langgetter_object(defs, eng, prefix)
-    if not (defs or eng) then
-        error("Expected a definition and an engine")
-    end
-    local children = {}
-    prefix = prefix or ""
-    return setmetatable({}, {
-        __index=function (t, k)
-            local key = prefix ..  k
-            local def = defs[k]
-            if type(def) == "table" then
-                if not children[k] then
-                    children[k] = langgetter_object(def, eng, key..".")
-                end
-                return children[k]
-            else
-                
-                return eng:string(key) or eng:rule(key)
-            end
-        end
-    })
-end
+
 ---it creates a translator
 ---@return translator
 function mod.translator()
@@ -133,22 +124,26 @@ function mod.translator()
       lang=nil
     }
 
-    function obj:setlanguage(name)
-        self.curlanguage = mod.language(name)
-        self.lang=langgetter_object(self.curlanguage.defs, self.curlanguage.engine)
+    function obj:setcurrentlanguage(code)
+        self.curlanguage = mod.language(code)
+        self.lang=self.curlanguage.defs
+    end
+
+    function obj:getcurrentlanguage()
+        return self.curlanguage
     end
 
     ---@param key string
     ---@param args any[]
-    ---@param langname string
+    ---@param langcode string
     ---@return string
-    ---@overload fun(key:string,langname:string): string
-    function obj:translate(key, args, langname)
-        if not langname then
-            langname = args
+    ---@overload fun(key:string,langcode:string): string
+    function obj:translate(key, args, langcode)
+        if not langcode then
+            langcode = args
             args = nil
         end
-        local lang = mod.language(langname)
+        local lang = mod.language(langcode)
         if not args then
             return lang.engine:string(key)
         else
