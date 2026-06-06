@@ -1,11 +1,12 @@
 --The Great Language Engine: a pattern matching engine made for translation and linguistic stuff
 --second version (improved for perfomance)
-local sort = require "src.sort"
-local format = require "src.stringfmt"
+local sort = require "tsle.sort"
+local format = require "tsle.stringfmt"
 
 ---@class engine
 ---@field strings table<string,string>
 ---@field rules table<string,function>
+---@field predicates function[]
 local engine = {}
 local engine_mt = {__index=engine}
 local altmark = {}
@@ -18,7 +19,8 @@ local altmark = {}
 function engine.new()
     local obj = {
         strings = {},
-        rules={}
+        rules={},
+        predicates={}
     }
     return setmetatable(obj, engine_mt)
 end
@@ -31,7 +33,7 @@ local alternate = {}
 ---creates an alternate object. That is used to smash similar cases together
 ---@param tbl any[]
 ---@return alternate
-function engine:alternate(tbl)
+function engine.alternate(tbl)
     return {
         mark=altmark,
         alts=tbl
@@ -108,6 +110,20 @@ function engine:rule(name, params, cases)
         return self.rules[name]
     end
 
+    --pure stringformat-case
+    if type(cases) == "string" then
+        local function rule(...)
+            local tbl = {}
+            for i, v in ipairs(params) do
+                tbl[v] = select(i, ...)
+            end
+            return format(cases, tbl)
+        end
+
+        self.rules[name] = rule
+        return rule
+    end
+
     --orders that by specificity (number of conditions). Default cases will decrase it
     sort(cases, function (x)
         local matchingslen = type(x[1][1]) == "string" and 1 or #x[1]
@@ -165,15 +181,21 @@ function engine:rule(name, params, cases)
         local prevnode
         for j, vl in ipairs(case[1]) do
             if not tree[vl[1]] then
-                tree[vl[1]] = {children={}, values={}}
+                tree[vl[1]] = {children={}, preds={}, values={}}
                 if prevnode then
                     prevnode.children[vl[1]] = tree[vl[1]]
                 else
                     prevnode = tree[vl[1]]
                 end
             end
-            
-            table.insert(keys, tostring(vl[2]))
+            local key
+            if type(vl[2]) == "function" then
+                key = "!" .. tostring(#tree[vl[1]].preds + 1)
+                table.insert(tree[vl[1]].preds, vl[2])
+            else
+                key = tostring(vl[2])
+            end
+            table.insert(keys, key)
             tree[vl[1]].values[vl[2]] = true
         end
         local key = table.concat(keys, "_")
@@ -190,7 +212,20 @@ function engine:rule(name, params, cases)
         for i, param in ipairs(params) do
             tbl[param] = select(i, ...)
             local test = node.values[tbl[param]]
-            local key = test and tostring(tbl[param]) or tostring(engine.DEFAULT)
+            local key
+            if not test then
+                for j, f in ipairs(node.preds) do
+                    local r = f(tbl[param])
+                    if r == true then
+                        key = "!" .. tostring(j)
+                    end
+                end
+                if not key then
+                    key = tostring(engine.DEFAULT)
+                end
+            else
+                key = tostring(tbl[param])
+            end
             keys[#keys + 1] = key
             local node_ = node.children[params[i + 1]]
             if not node_ then
