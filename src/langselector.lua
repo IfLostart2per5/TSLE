@@ -113,6 +113,12 @@ function mod.language(code)
     return assert(languages[code], "Language '"..code.."' not found")
 end
 
+---Checks if there is a language
+---@param code string
+---@return boolean
+function mod.haslanguage(code)
+    return languages[code] and true or false
+end
 
 ---it creates a translator
 ---@return translator
